@@ -81,6 +81,8 @@ def my_config():
     ### Resume chekpoint_path ###
     resume_checkpoint_path = None
 
+    LOCAL_TESTING = True
+
     ### Model params ###
 
     # Whether dense reward should come from potential function or not

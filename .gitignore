@@ -173,3 +173,7 @@ node_modules/
 #manually correcting for demo 
 !**/static/**/*.png
 !src/overcooked_demo/server/static/lib
+
+src/human_aware_rl/ppo/model_temp
+**/reproduced_results/**
+src/human_aware_rl/ppo/wandb
