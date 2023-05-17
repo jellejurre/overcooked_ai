@@ -9,10 +9,17 @@ import dill
 import gym
 import numpy as np
 import ray
+from gym.spaces import Dict, Discrete
+from ray.rllib import SampleBatch
 from ray.rllib.agents.ppo import PPOTrainer
 from ray.rllib.algorithms.callbacks import DefaultCallbacks
+from ray.rllib.algorithms.ppo import PPOTF1Policy
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
+from ray.rllib.evaluation.postprocessing import Postprocessing, compute_advantages
 from ray.rllib.models import ModelCatalog
+from ray.rllib.utils import override
+from ray.rllib.utils.numpy import convert_to_numpy
+from ray.rllib.utils.tf_utils import make_tf_callable, explained_variance
 from ray.tune.logger import UnifiedLogger
 from ray.tune.registry import register_env
 from ray.tune.result import DEFAULT_RESULTS_DIR
@@ -36,6 +43,8 @@ action_space = gym.spaces.Discrete(len(Action.ALL_ACTIONS))
 obs_space = gym.spaces.Discrete(len(Action.ALL_ACTIONS))
 timestr = datetime.today().strftime("%Y-%m-%d_%H-%M-%S")
 
+OPPONENT_OBS = "opponent_obs"
+OPPONENT_ACTION = "opponent_action"
 
 class RlLibAgent(Agent):
     """
@@ -122,7 +131,7 @@ class OvercookedMultiAgent(MultiAgentEnv):
     """
 
     # List of all agent types currently supported
-    supported_agents = ["ppo", "bc"]
+    supported_agents = ["mappo", "ppo", "bc"]
 
     # Default bc_schedule, includes no bc agent at any time
     bc_schedule = self_play_bc_schedule = [(0, 0), (float("inf"), 0)]
@@ -146,12 +155,13 @@ class OvercookedMultiAgent(MultiAgentEnv):
     }
 
     def __init__(
-        self,
-        base_env,
-        reward_shaping_factor=0.0,
-        reward_shaping_horizon=0,
-        bc_schedule=None,
-        use_phi=True,
+            self,
+            base_env,
+            reward_shaping_factor=0.0,
+            reward_shaping_horizon=0,
+            bc_schedule=None,
+            use_phi=True,
+            centralized_critic=False,
     ):
         """
         base_env: OvercookedEnv
@@ -165,8 +175,12 @@ class OvercookedMultiAgent(MultiAgentEnv):
             self.bc_schedule = bc_schedule
         self._validate_schedule(self.bc_schedule)
         self.base_env = base_env
+        self.centralized_critic = centralized_critic
         # since we are not passing featurize_fn in as an argument, we create it here and check its validity
         self.featurize_fn_map = {
+            "mappo": lambda state: self.base_env.lossless_state_encoding_mdp(
+                state
+            ),
             "ppo": lambda state: self.base_env.lossless_state_encoding_mdp(
                 state
             ),
@@ -249,32 +263,38 @@ class OvercookedMultiAgent(MultiAgentEnv):
         # hardcode mapping between action space and agent
         ob_space = {}
         for agent in agents:
-            if agent.startswith("ppo"):
+            if agent.startswith("mappo"):
+                ob_space[agent] = self.ppo_observation_space
+            elif agent.startswith("ppo"):
                 ob_space[agent] = self.ppo_observation_space
             else:
                 ob_space[agent] = self.bc_observation_space
         self.observation_space = gym.spaces.Dict(ob_space)
 
+
+    def _map_to_float32(self, tuple):
+        return tuple[0].astype(np.float32), tuple[1].astype(np.float32)
+
     def _get_featurize_fn(self, agent_id):
+        if agent_id.startswith("mappo"):
+            return lambda state: self._map_to_float32(self.base_env.lossless_state_encoding_mdp(state))
         if agent_id.startswith("ppo"):
-            return lambda state: self.base_env.lossless_state_encoding_mdp(
-                state
-            )
+            return lambda state: self._map_to_float32(self.base_env.lossless_state_encoding_mdp(state))
         if agent_id.startswith("bc"):
-            return lambda state: self.base_env.featurize_state_mdp(state)
+            return lambda state: self._map_to_float32(self.base_env.featurize_state_mdp(state))
         raise ValueError("Unsupported agent type {0}".format(agent_id))
 
     def _get_obs(self, state):
         ob_p0 = self._get_featurize_fn(self.curr_agents[0])(state)[0]
         ob_p1 = self._get_featurize_fn(self.curr_agents[1])(state)[1]
-        return ob_p0.astype(np.float32), ob_p1.astype(np.float32)
+        return ob_p0, ob_p1
 
     def _populate_agents(self):
         # Always include at least one ppo agent (i.e. bc_sp not supported for simplicity)
-        agents = ["ppo"]
+        agents = ["mappo"] if self.centralized_critic else ["ppo"]
 
         # Coin flip to determine whether other agent should be ppo or bc
-        other_agent = "bc" if np.random.uniform() < self.bc_factor else "ppo"
+        other_agent = "bc" if np.random.uniform() < self.bc_factor else agents[0]
         agents.append(other_agent)
 
         # Randomize starting indices
@@ -336,10 +356,10 @@ class OvercookedMultiAgent(MultiAgentEnv):
         ob_p0, ob_p1 = self._get_obs(next_state)
 
         shaped_reward_p0 = (
-            sparse_reward + self.reward_shaping_factor * dense_reward[0]
+                sparse_reward + self.reward_shaping_factor * dense_reward[0]
         )
         shaped_reward_p1 = (
-            sparse_reward + self.reward_shaping_factor * dense_reward[1]
+                sparse_reward + self.reward_shaping_factor * dense_reward[1]
         )
 
         obs = {self.curr_agents[0]: ob_p0, self.curr_agents[1]: ob_p1}
@@ -366,6 +386,7 @@ class OvercookedMultiAgent(MultiAgentEnv):
         """
         self.base_env.reset(regen_mdp)
         self.curr_agents = self._populate_agents()
+        self._agent_ids = self.curr_agents
         ob_p0, ob_p1 = self._get_obs(self.base_env.state)
         return {self.curr_agents[0]: ob_p0, self.curr_agents[1]: ob_p1}
 
@@ -423,13 +444,13 @@ class OvercookedMultiAgent(MultiAgentEnv):
             OvercookedMultiAgent instance specified by env_config params
         """
         assert (
-            env_config
-            and "env_params" in env_config
-            and "multi_agent_params" in env_config
+                env_config
+                and "env_params" in env_config
+                and "multi_agent_params" in env_config
         )
         assert (
-            "mdp_params" in env_config
-            or "mdp_params_schedule_fn" in env_config
+                "mdp_params" in env_config
+                or "mdp_params_schedule_fn" in env_config
         ), "either a fixed set of mdp params or a schedule function needs to be given"
         # "layout_name" and "rew_shaping_params"
         if "mdp_params" in env_config:
@@ -695,13 +716,14 @@ def gen_trainer_from_params(params):
     evaluation_params = params["evaluation_params"]
     bc_params = params["bc_params"]
     multi_agent_params = params["environment_params"]["multi_agent_params"]
+    centralized_critic = multi_agent_params["centralized_critic"]
 
     env = OvercookedMultiAgent.from_config(environment_params)
 
     # Returns a properly formatted policy tuple to be passed into ppotrainer config
     def gen_policy(policy_type="ppo"):
         # supported policy types thus far
-        assert policy_type in ["ppo", "bc"]
+        assert policy_type in ["ppo", "bc", "mappo"]
 
         if policy_type == "ppo":
             config = {
@@ -724,6 +746,19 @@ def gen_trainer_from_params(params):
                 env.bc_observation_space,
                 env.shared_action_space,
                 bc_config,
+            )
+        elif policy_type == "mappo":
+            config = {
+                "model": {
+                    "custom_model_config": model_params,
+                    "custom_model": "MyMAPPOModel",
+                }
+            }
+            return (
+                None,
+                env.ppo_observation_space,
+                env.shared_action_space,
+                config
             )
 
     # Rllib compatible way of setting the directory we store agent checkpoints in
@@ -750,7 +785,8 @@ def gen_trainer_from_params(params):
 
     # Create rllib compatible multi-agent config based on params
     multi_agent_config = {}
-    all_policies = ["ppo"]
+    algorithm_name = "ppo" if not centralized_critic else "mappo"
+    all_policies = [algorithm_name]
 
     # Whether both agents should be learned
     self_play = iterable_equal(
@@ -765,13 +801,15 @@ def gen_trainer_from_params(params):
     }
 
     def select_policy(agent_id, episode, worker, **kwargs):
+        if agent_id.startswith("mappo"):
+            return "mappo"
         if agent_id.startswith("ppo"):
             return "ppo"
         if agent_id.startswith("bc"):
             return "bc"
 
     multi_agent_config["policy_mapping_fn"] = select_policy
-    multi_agent_config["policies_to_train"] = {"ppo"}
+    multi_agent_config["policies_to_train"] = {algorithm_name}
 
     if "outer_shape" not in environment_params:
         environment_params["outer_shape"] = None
@@ -780,7 +818,10 @@ def gen_trainer_from_params(params):
         environment_params["eval_mdp_params"] = environment_params[
             "mdp_params"
         ]
-    trainer = PPOTrainer(
+
+    cls = CentralizedCritic if centralized_critic else PPOTrainer
+
+    trainer = cls(
         env="overcooked_multi_agent",
         config={
             "multiagent": multi_agent_config,
@@ -790,8 +831,8 @@ def gen_trainer_from_params(params):
                 environment_params["eval_mdp_params"],
                 environment_params["env_params"],
                 environment_params["outer_shape"],
-                "ppo",
-                "ppo" if self_play else "bc",
+                algorithm_name,
+                algorithm_name if self_play else "bc",
                 verbose=params["verbose"],
             ),
             "env_config": environment_params,
@@ -802,6 +843,116 @@ def gen_trainer_from_params(params):
     )
     return trainer
 
+class CentralizedCritic(PPOTrainer):
+    @override(PPOTrainer)
+    def get_default_policy_class(self, config):
+        return CentralizedCriticPolicy
+
+
+class CentralizedCriticPolicy(PPOTF1Policy):
+
+    def __init__(self, observation_space, action_space, config):
+        PPOTF1Policy.__init__(self, observation_space, action_space, config)
+        self.compute_central_vf = make_tf_callable(self.get_session())(
+            self.model.central_value_function
+        )
+
+    @override(PPOTF1Policy)
+    def loss(self, model, dist_class, train_batch):
+        # Use super() to get to the base PPO policy.
+        # This special loss function utilizes a shared
+        # value function defined on self, and the loss function
+        # defined on PPO policies.
+        return loss_with_central_critic(
+            self, super(), model, dist_class, train_batch
+        )
+
+    @override(PPOTF1Policy)
+    def postprocess_trajectory(
+        self, sample_batch, other_agent_batches=None, episode=None
+    ):
+        return centralized_critic_postprocessing(
+            self, sample_batch, other_agent_batches, episode
+        )
+
+    @override(PPOTF1Policy)
+    def stats_fn(self, train_batch: SampleBatch):
+        stats = super().stats_fn(train_batch)
+        stats.update(central_vf_stats(self, train_batch))
+        return stats
+
+# Grabs the opponent obs/act and includes it in the experience train_batch,
+# and computes GAE using the central vf predictions.
+def centralized_critic_postprocessing(
+    policy, sample_batch, other_agent_batches=None, episode=None
+):
+    pytorch = policy.config["framework"] == "torch"
+    if (pytorch and hasattr(policy, "compute_central_vf")) or (
+        not pytorch and policy.loss_initialized()
+    ):
+        assert other_agent_batches is not None
+        [(_, opponent_batch)] = list(other_agent_batches.values())
+
+        # also record the opponent obs and actions in the trajectory
+        sample_batch[OPPONENT_OBS] = opponent_batch[SampleBatch.CUR_OBS]
+        sample_batch[OPPONENT_ACTION] = opponent_batch[SampleBatch.ACTIONS]
+
+        # overwrite default VF prediction with the central VF
+        sample_batch[SampleBatch.VF_PREDS] = convert_to_numpy(
+            policy.compute_central_vf(
+                sample_batch[SampleBatch.CUR_OBS],
+                sample_batch[OPPONENT_ACTION],
+            )
+        )
+    else:
+        # Policy hasn't been initialized yet, use zeros.
+        sample_batch[OPPONENT_ACTION] = np.zeros_like(sample_batch[SampleBatch.ACTIONS])
+        sample_batch[SampleBatch.VF_PREDS] = np.zeros_like(
+            sample_batch[SampleBatch.REWARDS], dtype=np.float32
+        )
+
+    completed = sample_batch["dones"][-1]
+    if completed:
+        last_r = 0.0
+    else:
+        last_r = sample_batch[SampleBatch.VF_PREDS][-1]
+
+    train_batch = compute_advantages(
+        sample_batch,
+        last_r,
+        policy.config["gamma"],
+        policy.config["lambda"],
+        use_gae=policy.config["use_gae"],
+    )
+    return train_batch
+
+
+# Copied from PPO but optimizing the central value function.
+def loss_with_central_critic(policy, base_policy, model, dist_class, train_batch):
+    # Save original value function.
+    vf_saved = model.value_function
+
+    # Calculate loss with a custom value function.
+    model.value_function = lambda: policy.model.central_value_function(
+        train_batch[SampleBatch.CUR_OBS],
+        train_batch[OPPONENT_ACTION],
+    )
+    policy._central_value_out = model.value_function()
+    loss = base_policy.loss(model, dist_class, train_batch)
+
+    # Restore original value function.
+    model.value_function = vf_saved
+
+    return loss
+
+
+def central_vf_stats(policy, train_batch):
+    # Report the explained variance of the central value function.
+    return {
+        "vf_explained_var": explained_variance(
+            train_batch[Postprocessing.VALUE_TARGETS], policy._central_value_out
+        )
+    }
 
 ### Serialization ###
 

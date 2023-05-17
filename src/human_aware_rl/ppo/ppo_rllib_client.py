@@ -6,9 +6,13 @@ import warnings
 
 import numpy as np
 
-from overcooked_ai_py.agents.benchmarking import AgentEvaluator
 
 warnings.simplefilter("ignore")
+
+from pathlib import Path
+import sys
+path_root = Path(__file__).parents[2]
+sys.path.append(str(path_root))
 
 # environment variable that tells us whether this code is running on the server or not
 LOCAL_TESTING = os.getenv("RUN_ENV", "production") == "local"
@@ -46,14 +50,17 @@ from human_aware_rl.imitation.behavior_cloning_tf2 import (
     BC_SAVE_DIR,
     BehaviorCloningPolicy,
 )
-from human_aware_rl.ppo.ppo_rllib import RllibLSTMPPOModel, RllibPPOModel
+from human_aware_rl.ppo.ppo_rllib import RllibLSTMPPOModel, RllibPPOModel, RllibMAPPOModel
 from human_aware_rl.rllib.rllib import (
     OvercookedMultiAgent,
     gen_trainer_from_params,
-    save_trainer,
+    save_trainer, TrainingCallbacks,
 )
 from human_aware_rl.utils import WANDB_PROJECT
 
+
+import pydevd_pycharm
+pydevd_pycharm.settrace('localhost', port=10233, stdoutToServer=True, stderrToServer=True, suspend=False)
 ###################### Temp Documentation #######################
 #   run the following command in order to train a PPO self-play #
 #   agent with the static parameters listed in my_config        #
@@ -82,6 +89,7 @@ def my_config():
     resume_checkpoint_path = None
 
     LOCAL_TESTING = True
+    centralized_critic = True
 
     ### Model params ###
 
@@ -104,7 +112,7 @@ def my_config():
     D2RL = False
     ### Training Params ###
 
-    num_workers = 30 if not LOCAL_TESTING else 2
+    num_workers = 30 if not LOCAL_TESTING else 1
 
     # list of all random seeds to use for experiments, used to reproduce results
     seeds = [0]
@@ -219,7 +227,9 @@ def my_config():
         kl_coeff,
     )
 
-    experiment_name = "{0}_{1}_{2}".format("PPO", layout_name, params_str)
+    algorithm = "MAPPO" if centralized_critic else "PPO"
+
+    experiment_name = "{0}_{1}_{2}".format(algorithm, layout_name, params_str)
 
     # Rewards the agent will receive for intermediate actions
     rew_shaping_params = {
@@ -257,6 +267,7 @@ def my_config():
         "NUM_CONV_LAYERS": NUM_CONV_LAYERS,
         "CELL_SIZE": CELL_SIZE,
         "D2RL": D2RL,
+        "centralized_critic": centralized_critic,
     }
 
     # to be passed into the rllib.PPOTrainer class
@@ -284,6 +295,8 @@ def my_config():
         ],
         "eager_tracing": eager,
         "log_level": "WARN" if verbose else "ERROR",
+        "callbacks": TrainingCallbacks,
+        "_disable_preprocessor_api": True,
     }
 
     # To be passed into AgentEvaluator constructor and _evaluate function
@@ -310,6 +323,7 @@ def my_config():
             "reward_shaping_horizon": reward_shaping_horizon,
             "use_phi": use_phi,
             "bc_schedule": bc_schedule,
+            "centralized_critic": centralized_critic,
         },
     }
 
@@ -323,8 +337,12 @@ def my_config():
     }
 
     ray_params = {
-        "custom_model_id": "MyPPOModel",
-        "custom_model_cls": RllibLSTMPPOModel
+        "custom_model_id": "MyMAPPOModel"
+        if centralized_critic else
+        "MyPPOModel",
+        "custom_model_cls": RllibMAPPOModel
+        if centralized_critic else
+        RllibLSTMPPOModel
         if model_params["use_lstm"]
         else RllibPPOModel,
         "temp_dir": temp_dir,

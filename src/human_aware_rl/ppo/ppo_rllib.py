@@ -2,6 +2,7 @@ import numpy as np
 import tensorflow as tf
 from ray.rllib.models.tf.recurrent_net import RecurrentNetwork
 from ray.rllib.models.tf.tf_modelv2 import TFModelV2
+from overcooked_ai_py.mdp.actions import Action
 
 
 class RllibPPOModel(TFModelV2):
@@ -235,3 +236,97 @@ class RllibLSTMPPOModel(RecurrentNetwork):
             np.zeros(self.cell_size, np.float32),
             np.zeros(self.cell_size, np.float32),
         ]
+
+
+class RllibMAPPOModel(TFModelV2):
+    """
+    Model that will map environment states to action probabilities. Will be shared across agents
+    """
+
+    def __init__(
+        self,
+        obs_space,
+        action_space,
+        num_outputs,
+        model_config,
+        name,
+        **kwargs
+    ):
+        super(RllibMAPPOModel, self).__init__(
+            obs_space, action_space, num_outputs, model_config, name
+        )
+        # params we got to pass in from the call to "run"
+        custom_params = model_config["custom_model_config"]
+
+        ## Parse custom network params
+        num_hidden_layers = custom_params["NUM_HIDDEN_LAYERS"]
+        size_hidden_layers = custom_params["SIZE_HIDDEN_LAYERS"]
+        num_filters = custom_params["NUM_FILTERS"]
+        num_convs = custom_params["NUM_CONV_LAYERS"]
+        d2rl = custom_params["D2RL"]
+        assert type(d2rl) == bool
+
+        ## Create graph of custom network. It will under a shared tf scope such that all agents
+        ## use the same model
+        self.inputs = tf.keras.Input(
+            shape=obs_space.shape, name="observations"
+        )
+        out = self.inputs
+
+        # Apply initial conv layer with a larger kenel (why?)
+        if num_convs > 0:
+            y = tf.keras.layers.Conv2D(
+                filters=num_filters,
+                kernel_size=[5, 5],
+                padding="same",
+                activation=tf.nn.leaky_relu,
+                name="conv_initial",
+            )
+            out = y(out)
+
+        # Apply remaining conv layers, if any
+        for i in range(0, num_convs - 1):
+            padding = "same" if i < num_convs - 2 else "valid"
+            out = tf.keras.layers.Conv2D(
+                filters=num_filters,
+                kernel_size=[3, 3],
+                padding=padding,
+                activation=tf.nn.leaky_relu,
+                name="conv_{}".format(i),
+            )(out)
+
+        # Apply dense hidden layers, if any
+        conv_out = tf.keras.layers.Flatten()(out)
+        out = conv_out
+        for i in range(num_hidden_layers):
+            if i > 0 and d2rl:
+                out = tf.keras.layers.Concatenate()([out, conv_out])
+            out = tf.keras.layers.Dense(size_hidden_layers)(out)
+            out = tf.keras.layers.LeakyReLU()(out)
+
+        # Linear last layer for action distribution logits
+        layer_out = tf.keras.layers.Dense(self.num_outputs)(out)
+        self.model = tf.keras.Model(inputs=[self.inputs],outputs=[layer_out])
+
+        opp_act = tf.keras.layers.Input(shape=(len(Action.ALL_ACTIONS)), name="opp_act")
+        concat_obs = tf.keras.layers.Concatenate(axis=1)([conv_out, opp_act])
+        central_vf_dense = tf.keras.layers.Dense(1, name="c_vf_dense")(concat_obs)
+        central_vf_out = tf.keras.layers.Dense(1, name="c_vf_out")(central_vf_dense)
+        self.central_vf = tf.keras.Model(inputs=[self.inputs, opp_act], outputs=central_vf_out)
+
+    def forward(self, input_dict, state=None, seq_lens=None):
+        input_dict['observations'] = input_dict['obs']
+        self.output = self.model(input_dict)
+        return (self.output, state)
+
+    def central_value_function(self, obs, opponent_actions):
+        return tf.reshape(
+            self.central_vf(
+                [obs, tf.one_hot(tf.cast(opponent_actions, tf.int32), len(Action.ALL_ACTIONS))]
+            ),
+            [-1],
+        )
+
+    def value_function(self):
+        val = self.output.shape[1]
+        return tf.constant([0 for i in range(val)])  # not used
