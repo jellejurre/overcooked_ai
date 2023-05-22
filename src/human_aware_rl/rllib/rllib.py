@@ -901,6 +901,7 @@ def centralized_critic_postprocessing(
         sample_batch[SampleBatch.VF_PREDS] = convert_to_numpy(
             policy.compute_central_vf(
                 sample_batch[SampleBatch.CUR_OBS],
+                sample_batch[SampleBatch.ACTIONS],
                 sample_batch[OPPONENT_ACTION],
             )
         )
@@ -935,6 +936,7 @@ def loss_with_central_critic(policy, base_policy, model, dist_class, train_batch
     # Calculate loss with a custom value function.
     model.value_function = lambda: policy.model.central_value_function(
         train_batch[SampleBatch.CUR_OBS],
+        train_batch[SampleBatch.ACTIONS],
         train_batch[OPPONENT_ACTION],
     )
     policy._central_value_out = model.value_function()

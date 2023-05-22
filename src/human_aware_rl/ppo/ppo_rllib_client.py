@@ -59,8 +59,8 @@ from human_aware_rl.rllib.rllib import (
 from human_aware_rl.utils import WANDB_PROJECT
 
 
-import pydevd_pycharm
-pydevd_pycharm.settrace('localhost', port=10233, stdoutToServer=True, stderrToServer=True, suspend=False)
+# import pydevd_pycharm
+# pydevd_pycharm.settrace('localhost', port=10233, stdoutToServer=True, stderrToServer=True, suspend=False)
 ###################### Temp Documentation #######################
 #   run the following command in order to train a PPO self-play #
 #   agent with the static parameters listed in my_config        #
@@ -112,7 +112,7 @@ def my_config():
     D2RL = False
     ### Training Params ###
 
-    num_workers = 30 if not LOCAL_TESTING else 1
+    num_workers = 30 if not LOCAL_TESTING else 2
 
     # list of all random seeds to use for experiments, used to reproduce results
     seeds = [0]

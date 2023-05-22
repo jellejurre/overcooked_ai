@@ -308,21 +308,23 @@ class RllibMAPPOModel(TFModelV2):
         layer_out = tf.keras.layers.Dense(self.num_outputs)(out)
         self.model = tf.keras.Model(inputs=[self.inputs],outputs=[layer_out])
 
+        act = tf.keras.layers.Input(shape=(len(Action.ALL_ACTIONS)), name="act")
+        act_dense = tf.keras.layers.Dense(1, name="act_dense", activation=tf.nn.leaky_relu)(act)
         opp_act = tf.keras.layers.Input(shape=(len(Action.ALL_ACTIONS)), name="opp_act")
-        concat_obs = tf.keras.layers.Concatenate(axis=1)([conv_out, opp_act])
-        central_vf_dense = tf.keras.layers.Dense(1, name="c_vf_dense")(concat_obs)
-        central_vf_out = tf.keras.layers.Dense(1, name="c_vf_out")(central_vf_dense)
-        self.central_vf = tf.keras.Model(inputs=[self.inputs, opp_act], outputs=central_vf_out)
+        opp_act_dense = tf.keras.layers.Dense(1, name="opp_act_dense", activation=tf.nn.leaky_relu)(act)
+        concat_obs = tf.keras.layers.Concatenate(axis=1)([conv_out, act_dense, opp_act_dense])
+        central_vf_out = tf.keras.layers.Dense(1, name="c_vf_dense", activation=tf.nn.leaky_relu)(concat_obs)
+        self.central_vf = tf.keras.Model(inputs=[self.inputs, act, opp_act], outputs=central_vf_out)
 
     def forward(self, input_dict, state=None, seq_lens=None):
         input_dict['observations'] = input_dict['obs']
         self.output = self.model(input_dict)
         return (self.output, state)
 
-    def central_value_function(self, obs, opponent_actions):
+    def central_value_function(self, obs, action, opponent_actions):
         return tf.reshape(
             self.central_vf(
-                [obs, tf.one_hot(tf.cast(opponent_actions, tf.int32), len(Action.ALL_ACTIONS))]
+                [obs, tf.one_hot(tf.cast(opponent_actions, tf.int32), len(Action.ALL_ACTIONS)), tf.one_hot(tf.cast(action, tf.int32), len(Action.ALL_ACTIONS))]
             ),
             [-1],
         )
