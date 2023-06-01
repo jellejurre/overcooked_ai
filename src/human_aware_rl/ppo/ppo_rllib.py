@@ -312,7 +312,7 @@ class RllibMAPPOModel(TFModelV2):
         act_dense = tf.keras.layers.Dense(1, name="act_dense", activation=tf.nn.leaky_relu)(act)
         opp_act = tf.keras.layers.Input(shape=(len(Action.ALL_ACTIONS)), name="opp_act")
         opp_act_dense = tf.keras.layers.Dense(1, name="opp_act_dense", activation=tf.nn.leaky_relu)(act)
-        concat_obs = tf.keras.layers.Concatenate(axis=1)([conv_out, act_dense, opp_act_dense])
+        concat_obs = tf.keras.layers.Concatenate(axis=1)([out, act_dense, opp_act_dense])
         central_vf_out = tf.keras.layers.Dense(1, name="c_vf_dense", activation=tf.nn.leaky_relu)(concat_obs)
         self.central_vf = tf.keras.Model(inputs=[self.inputs, act, opp_act], outputs=central_vf_out)
 
