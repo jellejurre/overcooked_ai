@@ -177,3 +177,6 @@ node_modules/
 src/human_aware_rl/ppo/model_temp
 **/reproduced_results/**
 src/human_aware_rl/ppo/wandb
+**/results/**
+**/wandb/**
+**/bc_runs/**
