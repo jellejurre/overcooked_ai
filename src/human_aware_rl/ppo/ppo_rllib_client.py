@@ -88,8 +88,8 @@ def my_config():
     ### Resume chekpoint_path ###
     resume_checkpoint_path = None
 
-    LOCAL_TESTING = True
-    centralized_critic = True
+    LOCAL_TESTING = False
+    centralized_critic = False
 
     ### Model params ###
 
@@ -112,7 +112,7 @@ def my_config():
     D2RL = False
     ### Training Params ###
 
-    num_workers = 30 if not LOCAL_TESTING else 2
+    num_workers = 2
 
     # list of all random seeds to use for experiments, used to reproduce results
     seeds = [0]
@@ -121,7 +121,7 @@ def my_config():
     seed = None
 
     # Number of gpus the central driver should use
-    num_gpus = 0 if LOCAL_TESTING else 1
+    num_gpus = 0 if LOCAL_TESTING else 0
 
     # How many environment timesteps will be simulated (across all environments)
     # for one set of gradient updates. Is divided equally across environments

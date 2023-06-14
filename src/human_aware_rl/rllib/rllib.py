@@ -978,7 +978,7 @@ def save_trainer(trainer, params, path=None):
     return save_path
 
 
-def load_trainer(save_path, true_num_workers=False):
+def load_trainer(save_path, true_num_workers=False, checkpoint_path = None):
     """
     Returns a ray compatible trainer object that was previously saved at `save_path` by a call to `save_trainer`
     Note that `save_path` is the full path to the checkpoint directory
@@ -1008,6 +1008,8 @@ def load_trainer(save_path, true_num_workers=False):
     # Get un-trained trainer object with proper config
     trainer = gen_trainer_from_params(config)
     # Load weights into dummy object
+    if checkpoint_path is not None:
+        save_path = os.path.join(save_path, f"{checkpoint_path}\\")
     trainer.restore(save_path)
     return trainer
 
@@ -1026,12 +1028,12 @@ def get_agent_pair_from_trainer(trainer, policy_id_0="ppo", policy_id_1="ppo"):
     return AgentPair(agent0, agent1)
 
 
-def load_agent_pair(save_path, policy_id_0="ppo", policy_id_1="ppo"):
+def load_agent_pair(save_path, policy_id_0="ppo", policy_id_1="ppo", checkpoint_path=None):
     """
     Returns an Overcooked AgentPair object that has as player 0 and player 1 policies with
     ID policy_id_0 and policy_id_1, respectively
     """
-    trainer = load_trainer(save_path)
+    trainer = load_trainer(save_path, checkpoint_path=checkpoint_path)
     return get_agent_pair_from_trainer(trainer, policy_id_0, policy_id_1)
 
 

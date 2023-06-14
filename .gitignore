@@ -180,3 +180,4 @@ src/human_aware_rl/ppo/wandb
 **/results/**
 **/wandb/**
 **/bc_runs/**
+**/models/**
