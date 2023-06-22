@@ -45,14 +45,18 @@ if __name__ == '__main__':
     for layout in layouts:
         fig, ax = plt.subplots()
         values = []
+        errors = []
         for type in types:
             max = 0
+            error = 0
             for i in range(len(data[layout][type])):
                 curr_value = data[layout][type][i][1][0]
                 if(curr_value > max):
                     max = curr_value
+                    error = data[layout][type][i][1][1]
             values.append(max)
+            errors.append(error)
         ax.set_title(layout.replace("_", " "))
-        ax.bar(types, values)
+        ax.bar(types, values, yerr = errors)
         ax.set_ylabel("max reward")
         fig.show()

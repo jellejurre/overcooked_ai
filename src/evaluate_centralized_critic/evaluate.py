@@ -19,7 +19,7 @@ def evaluate_mappo_single(path, layout, checkpoint_path):
         {"layout_name": layout, "old_dynamics": True}, {"horizon": 400}
     )
     ap = load_agent_pair(path, "mappo", "mappo", checkpoint_path)
-    result = ae.evaluate_agent_pair(ap, 1, 400)
+    result = ae.evaluate_agent_pair(ap, 3, 400)
     return result, result["ep_returns"]
 
 
@@ -28,7 +28,7 @@ def evaluate_ppo_single(path, layout, checkpoint_path):
         {"layout_name": layout, "old_dynamics": True}, {"horizon": 400}
     )
     ap = load_agent_pair(path, "ppo", "ppo", checkpoint_path)
-    result = ae.evaluate_agent_pair(ap, 1, 400)
+    result = ae.evaluate_agent_pair(ap, 3, 400)
     return result, result["ep_returns"]
 
 
@@ -46,7 +46,7 @@ def evaluate_mappo_bc_single(path_mappo, path_bc, layout, checkpoint_path):
     bc_agent = RlLibAgent(bc_policy, 1, base_env.featurize_state_mdp)
     agent_mappo = get_agent_from_trainer(trainer_mappo, policy_id="mappo")
     agent_pair = AgentPair(agent_mappo, bc_agent)
-    result = ae.evaluate_agent_pair(agent_pair, 1, 400)
+    result = ae.evaluate_agent_pair(agent_pair, 3, 400)
     return result, result["ep_returns"]
 
 
@@ -64,7 +64,7 @@ def evaluate_ppo_bc_single(path_ppo, path_bc, layout, checkpoint_path):
     bc_agent = RlLibAgent(bc_policy, 1, base_env.featurize_state_mdp)
     agent_ppo = get_agent_from_trainer(trainer_ppo, policy_id="ppo")
     agent_pair = AgentPair(agent_ppo, bc_agent)
-    result = ae.evaluate_agent_pair(agent_pair, 1, 400)
+    result = ae.evaluate_agent_pair(agent_pair, 3, 400)
     return result, result["ep_returns"]
 
 
@@ -83,7 +83,7 @@ def evaluate_bc_single(path_bc, layout):
 
     agent_pair = AgentPair(bc_agent, bc_agent, allow_duplicate_agents=True)
 
-    result = ae.evaluate_agent_pair(agent_pair, 1, 400)
+    result = ae.evaluate_agent_pair(agent_pair, 3, 400)
     return result, result["ep_returns"]
 
 
