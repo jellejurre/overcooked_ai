@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 import os
 
-types = ["bc", "mappo_sp", "ppo_sp", "mappo_bc", "ppo_bc"]
+types = ["mappo_sp", "ppo_sp", "bc", "mappo_bc", "ppo_bc"]
 layouts = ["asymmetric_advantages", "coordination_ring", "cramped_room", "forced_coordination"]
 
 
@@ -33,13 +33,15 @@ if __name__ == '__main__':
         fig, ax = plt.subplots()
         for type in types:
             if("bc" == type):
-                continue
-            curr_values = [x[1][0] for x in data[layout][type]]
+                curr_values = [data[layout][type][0][1][0] for x in range(len(checkpoints))]
+            else:
+                curr_values = [x[1][0] for x in data[layout][type]]
             line = ax.plot(checkpoints, curr_values, label=type)
         ax.legend()
         ax.set_title(layout.replace("_", " "))
         ax.set_xlabel("training iteration")
         ax.set_ylabel("reward")
+        fig.savefig(f"graphs/{layout}_graphs.png")
         fig.show()
 
     for layout in layouts:
@@ -59,4 +61,5 @@ if __name__ == '__main__':
         ax.set_title(layout.replace("_", " "))
         ax.bar(types, values, yerr = errors)
         ax.set_ylabel("max reward")
+        fig.savefig(f"graphs/{layout}_bars.png")
         fig.show()
